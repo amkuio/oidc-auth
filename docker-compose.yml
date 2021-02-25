@@ -1,0 +1,111 @@
+version: '3.4'
+ 
+networks:
+  kong-net:
+  keycloak-net:
+ 
+services:
+  kong-db:
+    image: postgres:9.6
+    volumes:
+      - ./data/persist/postgre:/var/lib/postgresql/data
+    networks:
+      - kong-net
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB:       kong
+      POSTGRES_USER:     kong
+      POSTGRES_PASSWORD: kong
+ 
+  kong-migration:
+    image: kong:2.0.0-alpine-oidc
+    entrypoint: ["/bin/sh","-c"]
+    command:
+    - |
+      kong migrations bootstrap
+    restart: on-failure
+    environment:
+      KONG_DATABASE:    postgres
+      KONG_PG_HOST:     kong-db
+      KONG_PG_USER:     kong
+      KONG_PG_PASSWORD: kong
+    links:
+      - kong-db
+    depends_on:
+      - kong-db
+    networks:
+      - kong-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kong"]
+      interval: 5s
+      timeout: 5s
+      retries: 5  
+   
+  kong:
+    image: kong:2.0.0-alpine-oidc
+    depends_on:
+      - kong-migration
+      - kong-db
+    networks:
+      - kong-net
+    ports:
+      - "58000:8000" # Listener
+      - "58001:8001" # Admin API
+      - "58443:8443" # Listener  (SSL)
+      - "58444:8444" # Admin API (SSL)
+    environment:
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE:         /etc/kong/certnew.cer
+      KONG_SSL_CERT:                            /etc/kong/certnew.cer
+      KONG_SSL_CERT_KEY:                        /etc/kong/server.key
+      KONG_ADMIN_SSL_CERT:                      /etc/kong/kong_admin/certnew.cer
+      KONG_ADMIN_SSL_CERT_KEY:                  /etc/kong/kong_admin/server.key
+      KONG_NGINX_PROXY_SSL_CLIENT_CERTIFICATE:  /etc/kong/certnew.cer
+      KONG_NGINX_ADMIN_SSL_CLIENT_CERTIFICATE:  /etc/kong/certnew.cer
+      KONG_CLIENT_SSL_CERT:                     /etc/kong/certnew.cer
+      KONG_CLIENT_SSL_CERT_KEY:                 /etc/kong/server.key
+      KONG_DATABASE:         postgres
+      KONG_PG_HOST:          kong-db
+      KONG_PG_PORT:          5432
+      KONG_PG_USER:          kong
+      KONG_PG_PASSWORD:      kong
+      KONG_PG_DATABASE:      kong
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG:  /dev/stderr
+      KONG_ADMIN_ERROR_LOG:  /dev/stderr
+      KONG_PROXY_LISTEN:     0.0.0.0:8000, 0.0.0.0:8443 ssl
+      KONG_ADMIN_LISTEN:     0.0.0.0:8001, 0.0.0.0:8444 ssl
+      KONG_PLUGINS:          oidc
+    volumes:
+      - /opt/docker/cert/certnew.cer:/etc/kong/certnew.cer:ro,Z
+      - /opt/docker/cert/server.key:/etc/kong/server.key:ro,Z
+      - /opt/docker/cert/certnew.cer:/etc/kong/kong_admin/certnew.cer:ro,Z
+      - /opt/docker/cert/server.key:/etc/kong/kong_admin/server.key:ro,Z
+
+  keycloak-db:
+    image: mariadb
+    volumes:
+      - ./data/persist/mariadb:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: keycloak
+      MYSQL_USER: keycloak
+      MYSQL_PASSWORD: password
+ 
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    ports:
+      - 8100:8443
+    volumes:
+      - /opt/docker/cert:/etc/x509/https
+    environment:
+      DB_VENDOR: mariadb
+      DB_ADDR: keycloak-db
+      DB_DATABASE: keycloak
+      DB_USER: keycloak
+      DB_PASSWORD: password
+      KEYCLOAK_USER: admin
+      KEYCLOAK_PASSWORD: Admin@123
+    depends_on:
+      - keycloak-db
